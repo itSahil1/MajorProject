@@ -20,6 +20,7 @@ import { createUser, getUnreadNotifications, markNotificationAsRead, getUserByEm
 
 const clientId = "BJKdDFkNtkWX87XqkuWrDu4rbkSvWyQZ5lswS0ucINxxcN0inRVW8zzKAywPPzgiOHP7_3PcfFwfpvcQvSdaLRs";
 
+
 const chainConfig = {
   chainNamespace: CHAIN_NAMESPACES.EIP155,
   chainId: "0xaa36a7",
@@ -210,7 +211,7 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
           <Link href="/" className="flex items-center">
             <Leaf className="h-6 w-6 md:h-8 md:w-8 text-green-500 mr-1 md:mr-2" />
             <div className="flex flex-col">
-              <span className="font-bold text-base md:text-lg text-gray-800">Zero2Hero</span>
+              <span className="font-bold text-base md:text-lg text-gray-800">PlanetPetrol</span>
               <span className="text-[8px] md:text-[10px] text-gray-500 -mt-1">ETHOnline24</span>
             </div>
           </Link>

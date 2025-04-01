@@ -1,18 +1,14 @@
-'use client'
-import { useState, useCallback, useEffect } from 'react'
-import {  MapPin, Upload, CheckCircle, Loader } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { StandaloneSearchBox,  useJsApiLoader } from '@react-google-maps/api'
-import { Libraries } from '@react-google-maps/api';
+'use client';
+import { useState, useEffect } from 'react';
+import { MapPin, Upload, CheckCircle, Loader } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { createUser, getUserByEmail, createReport, getRecentReports } from '@/utils/db/actions';
 import { useRouter } from 'next/navigation';
-import { toast } from 'react-hot-toast'
+import { toast } from 'react-hot-toast';
 
 const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-
-const libraries: Libraries = ['places'];
+const orsApiKey = process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY;
 
 export default function ReportPage() {
   const [user, setUser] = useState<{ id: number; email: string; name: string } | null>(null);
@@ -30,60 +26,73 @@ export default function ReportPage() {
     location: '',
     type: '',
     amount: '',
-  })
+  });
 
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
-  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'verifying' | 'success' | 'failure'>('idle')
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'verifying' | 'success' | 'failure'>('idle');
   const [verificationResult, setVerificationResult] = useState<{
     wasteType: string;
     quantity: string;
     confidence: number;
-  } | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [searchBox, setSearchBox] = useState<google.maps.places.SearchBox | null>(null);
+  const [locationQuery, setLocationQuery] = useState('');
+  const [locationSuggestions, setLocationSuggestions] = useState<Array<{ label: string; coordinates: number[] }>>([]);
 
-  const { isLoaded } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey: googleMapsApiKey!,
-    libraries: libraries
-  });
-
-  const onLoad = useCallback((ref: google.maps.places.SearchBox) => {
-    setSearchBox(ref);
-  }, []);
-
-  const onPlacesChanged = () => {
-    if (searchBox) {
-      const places = searchBox.getPlaces();
-      if (places && places.length > 0) {
-        const place = places[0];
-        setNewReport(prev => ({
-          ...prev,
-          location: place.formatted_address || '',
-        }));
-      }
+  // Fetch location suggestions using OpenRouteService Geocoding API
+  const fetchLocationSuggestions = async (query: string) => {
+    try {
+      const response = await fetch(
+        `https://api.openrouteservice.org/geocode/search?api_key=${orsApiKey}&text=${encodeURIComponent(query)}`
+      );
+      const data = await response.json();
+      return data.features.map((feature: any) => ({
+        label: feature.properties.label,
+        coordinates: feature.geometry.coordinates,
+      }));
+    } catch (error) {
+      console.error('Error fetching location suggestions:', error);
+      return [];
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target
-    setNewReport({ ...newReport, [name]: value })
-  }
+  // Handle location search input
+  const handleLocationSearch = async (query: string) => {
+    setLocationQuery(query);
+    if (query.length > 2) {
+      const suggestions = await fetchLocationSuggestions(query);
+      setLocationSuggestions(suggestions);
+    } else {
+      setLocationSuggestions([]);
+    }
+  };
 
+  // Handle location selection from suggestions
+  const handleLocationSelect = (location: { label: string; coordinates: number[] }) => {
+    setLocationQuery(location.label);
+    setNewReport((prev) => ({
+      ...prev,
+      location: location.label,
+    }));
+    setLocationSuggestions([]);
+  };
+
+  // Handle file input change
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0]
-      setFile(selectedFile)
-      const reader = new FileReader()
+      const selectedFile = e.target.files[0];
+      setFile(selectedFile);
+      const reader = new FileReader();
       reader.onload = (e) => {
-        setPreview(e.target?.result as string)
-      }
-      reader.readAsDataURL(selectedFile)
+        setPreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(selectedFile);
     }
-  }
+  };
 
+  // Convert file to base64
   const readFileAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -93,14 +102,15 @@ export default function ReportPage() {
     });
   };
 
+  // Verify waste using Gemini API
   const handleVerify = async () => {
-    if (!file) return
+    if (!file) return;
 
-    setVerificationStatus('verifying')
-    
+    setVerificationStatus('verifying');
+
     try {
       const genAI = new GoogleGenerativeAI(geminiApiKey!);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
       const base64Data = await readFileAsBase64(file);
 
@@ -128,38 +138,42 @@ export default function ReportPage() {
       const result = await model.generateContent([prompt, ...imageParts]);
       const response = await result.response;
       const text = response.text();
-      
+
+      // Sanitize the response to extract valid JSON
+      const sanitizedText = text.replace(/```json|```/g, '').trim();
+
       try {
-        const parsedResult = JSON.parse(text);
+        const parsedResult = JSON.parse(sanitizedText);
         if (parsedResult.wasteType && parsedResult.quantity && parsedResult.confidence) {
           setVerificationResult(parsedResult);
           setVerificationStatus('success');
           setNewReport({
             ...newReport,
             type: parsedResult.wasteType,
-            amount: parsedResult.quantity
+            amount: parsedResult.quantity,
           });
         } else {
           console.error('Invalid verification result:', parsedResult);
           setVerificationStatus('failure');
         }
       } catch (error) {
-        console.error('Failed to parse JSON response:', text);
+        console.error('Failed to parse JSON response:', sanitizedText);
         setVerificationStatus('failure');
       }
     } catch (error) {
       console.error('Error verifying waste:', error);
       setVerificationStatus('failure');
     }
-  }
+  };
 
+  // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (verificationStatus !== 'success' || !user) {
       toast.error('Please verify the waste before submitting or log in.');
       return;
     }
-    
+
     setIsSubmitting(true);
     try {
       const report = await createReport(
@@ -170,22 +184,21 @@ export default function ReportPage() {
         preview || undefined,
         verificationResult ? JSON.stringify(verificationResult) : undefined
       ) as any;
-      
+
       const formattedReport = {
         id: report.id,
         location: report.location,
         wasteType: report.wasteType,
         amount: report.amount,
-        createdAt: report.createdAt.toISOString().split('T')[0]
+        createdAt: report.createdAt.toISOString().split('T')[0],
       };
-      
+
       setReports([formattedReport, ...reports]);
       setNewReport({ location: '', type: '', amount: '' });
       setFile(null);
       setPreview(null);
       setVerificationStatus('idle');
       setVerificationResult(null);
-      
 
       toast.success(`Report submitted successfully! You've earned points for reporting waste.`);
     } catch (error) {
@@ -196,6 +209,7 @@ export default function ReportPage() {
     }
   };
 
+  // Check user on component mount
   useEffect(() => {
     const checkUser = async () => {
       const email = localStorage.getItem('userEmail');
@@ -205,15 +219,15 @@ export default function ReportPage() {
           user = await createUser(email, 'Anonymous User');
         }
         setUser(user);
-        
+
         const recentReports = await getRecentReports();
-        const formattedReports = recentReports.map(report => ({
+        const formattedReports = recentReports.map((report) => ({
           ...report,
-          createdAt: report.createdAt.toISOString().split('T')[0]
+          createdAt: report.createdAt.toISOString().split('T')[0],
         }));
         setReports(formattedReports);
       } else {
-        router.push('/login'); 
+        router.push('/login');
       }
     };
     checkUser();
@@ -222,8 +236,9 @@ export default function ReportPage() {
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-semibold mb-6 text-gray-800">Report waste</h1>
-      
+
       <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg mb-12">
+        {/* File Upload Section */}
         <div className="mb-8">
           <label htmlFor="waste-image" className="block text-lg font-medium text-gray-700 mb-2">
             Upload Waste Image
@@ -245,17 +260,19 @@ export default function ReportPage() {
             </div>
           </div>
         </div>
-        
+
+        {/* Image Preview */}
         {preview && (
           <div className="mt-4 mb-8">
             <img src={preview} alt="Waste preview" className="max-w-full h-auto rounded-xl shadow-md" />
           </div>
         )}
-        
-        <Button 
-          type="button" 
-          onClick={handleVerify} 
-          className="w-full mb-8 bg-blue-600 hover:bg-blue-700 text-white py-3 text-lg rounded-xl transition-colors duration-300" 
+
+        {/* Verify Button */}
+        <Button
+          type="button"
+          onClick={handleVerify}
+          className="w-full mb-8 bg-blue-600 hover:bg-blue-700 text-white py-3 text-lg rounded-xl transition-colors duration-300"
           disabled={!file || verificationStatus === 'verifying'}
         >
           {verificationStatus === 'verifying' ? (
@@ -263,9 +280,12 @@ export default function ReportPage() {
               <Loader className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" />
               Verifying...
             </>
-          ) : 'Verify Waste'}
+          ) : (
+            'Verify Waste'
+          )}
         </Button>
 
+        {/* Verification Result */}
         {verificationStatus === 'success' && verificationResult && (
           <div className="bg-green-50 border-l-4 border-green-400 p-4 mb-8 rounded-r-xl">
             <div className="flex items-center">
@@ -282,46 +302,46 @@ export default function ReportPage() {
           </div>
         )}
 
+        {/* Location, Waste Type, and Amount Inputs */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
           <div>
-            <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">Location</label>
-            {isLoaded ? (
-              <StandaloneSearchBox
-                onLoad={onLoad}
-                onPlacesChanged={onPlacesChanged}
-              >
-                <input
-                  type="text"
-                  id="location"
-                  name="location"
-                  value={newReport.location}
-                  onChange={handleInputChange}
-                  required
-                  className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300"
-                  placeholder="Enter waste location"
-                />
-              </StandaloneSearchBox>
-            ) : (
-              <input
-                type="text"
-                id="location"
-                name="location"
-                value={newReport.location}
-                onChange={handleInputChange}
-                required
-                className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300"
-                placeholder="Enter waste location"
-              />
+            <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
+              Location
+            </label>
+            <input
+              type="text"
+              id="location"
+              name="location"
+              value={locationQuery}
+              onChange={(e) => handleLocationSearch(e.target.value)}
+              required
+              className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300"
+              placeholder="Enter waste location"
+            />
+            {locationSuggestions.length > 0 && (
+              <ul className="mt-2 border border-gray-300 rounded-xl overflow-hidden">
+                {locationSuggestions.map((suggestion, index) => (
+                  <li
+                    key={index}
+                    className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+                    onClick={() => handleLocationSelect(suggestion)}
+                  >
+                    {suggestion.label}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
           <div>
-            <label htmlFor="type" className="block text-sm font-medium text-gray-700 mb-1">Waste Type</label>
+            <label htmlFor="type" className="block text-sm font-medium text-gray-700 mb-1">
+              Waste Type
+            </label>
             <input
               type="text"
               id="type"
               name="type"
               value={newReport.type}
-              onChange={handleInputChange}
+              onChange={(e) => setNewReport({ ...newReport, type: e.target.value })}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300 bg-gray-100"
               placeholder="Verified waste type"
@@ -329,13 +349,15 @@ export default function ReportPage() {
             />
           </div>
           <div>
-            <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-1">Estimated Amount</label>
+            <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-1">
+              Estimated Amount
+            </label>
             <input
               type="text"
               id="amount"
               name="amount"
               value={newReport.amount}
-              onChange={handleInputChange}
+              onChange={(e) => setNewReport({ ...newReport, amount: e.target.value })}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300 bg-gray-100"
               placeholder="Verified amount"
@@ -343,8 +365,10 @@ export default function ReportPage() {
             />
           </div>
         </div>
-        <Button 
-          type="submit" 
+
+        {/* Submit Button */}
+        <Button
+          type="submit"
           className="w-full bg-green-600 hover:bg-green-700 text-white py-3 text-lg rounded-xl transition-colors duration-300 flex items-center justify-center"
           disabled={isSubmitting}
         >
@@ -353,10 +377,13 @@ export default function ReportPage() {
               <Loader className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" />
               Submitting...
             </>
-          ) : 'Submit Report'}
+          ) : (
+            'Submit Report'
+          )}
         </Button>
       </form>
 
+      {/* Recent Reports Section */}
       <h2 className="text-3xl font-semibold mb-6 text-gray-800">Recent Reports</h2>
       <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
         <div className="max-h-96 overflow-y-auto">
@@ -386,5 +413,5 @@ export default function ReportPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }

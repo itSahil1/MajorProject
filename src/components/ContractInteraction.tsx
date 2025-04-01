@@ -2,8 +2,7 @@
 import { useState } from 'react';
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { performDataAnalysis, proposeAndSignInitiative } from '@/utils/litProtocol';
-import { useSessionSigs } from '@/hooks/useSessionSigs';
+
 
 export default function ContractInteraction({ onWasteReport }) {
   const [location, setLocation] = useState('');

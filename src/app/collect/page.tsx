@@ -109,88 +109,117 @@ export default function CollectPage() {
   const readFileAsBase64 = (dataUrl: string): string => {
     return dataUrl.split(',')[1]
   }
-
-  const handleVerify = async () => {
-    if (!selectedTask || !verificationImage || !user) {
-      toast.error('Missing required information for verification.')
-      return
-    }
-
-    setVerificationStatus('verifying')
-    
-    try {
-      const genAI = new GoogleGenerativeAI(geminiApiKey!)
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
-
-      const base64Data = readFileAsBase64(verificationImage)
-
-      const imageParts = [
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType: 'image/jpeg', // Adjust this if you know the exact type
-          },
-        },
-      ]
-
-      const prompt = `You are an expert in waste management and recycling. Analyze this image and provide:
-        1. Confirm if the waste type matches: ${selectedTask.wasteType}
-        2. Estimate if the quantity matches: ${selectedTask.amount}
-        3. Your confidence level in this assessment (as a percentage)
-        
-        Respond in JSON format like this:
-        {
-          "wasteTypeMatch": true/false,
-          "quantityMatch": true/false,
-          "confidence": confidence level as a number between 0 and 1
-        }`
-
-      const result = await model.generateContent([prompt, ...imageParts])
-      const response = await result.response
-      const text = response.text()
-      
-      try {
-        const parsedResult = JSON.parse(text)
-        setVerificationResult({
-          wasteTypeMatch: parsedResult.wasteTypeMatch,
-          quantityMatch: parsedResult.quantityMatch,
-          confidence: parsedResult.confidence
-        })
-        setVerificationStatus('success')
-        
-        if (parsedResult.wasteTypeMatch && parsedResult.quantityMatch && parsedResult.confidence > 0.7) {
-          await handleStatusChange(selectedTask.id, 'verified')
-          const earnedReward = Math.floor(Math.random() * 50) + 10 // Random reward between 10 and 59
-          
-          // Save the reward
-          await saveReward(user.id, earnedReward)
-
-          // Save the collected waste
-          await saveCollectedWaste(selectedTask.id, user.id, parsedResult)
-
-          setReward(earnedReward)
-          toast.success(`Verification successful! You earned ${earnedReward} tokens!`, {
-            duration: 5000,
-            position: 'top-center',
-          })
-        } else {
-          toast.error('Verification failed. The collected waste does not match the reported waste.', {
-            duration: 5000,
-            position: 'top-center',
-          })
-        }
-      } catch (error) {
-        console.log(error);
-        
-        console.error('Failed to parse JSON response:', text)
-        setVerificationStatus('failure')
-      }
-    } catch (error) {
-      console.error('Error verifying waste:', error)
-      setVerificationStatus('failure')
-    }
+// handle verify
+const handleVerify = async () => {
+  if (!selectedTask || !verificationImage || !user) {
+    toast.error('Missing required information for verification.');
+    return;
   }
 
+  setVerificationStatus('verifying');
+
+  try {
+    const genAI = new GoogleGenerativeAI(geminiApiKey!);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const base64Data = readFileAsBase64(verificationImage);
+
+    const imageParts = [
+      {
+        inlineData: {
+          data: base64Data,
+          mimeType: 'image/jpeg', // Adjust this if you know the exact type
+        },
+      },
+    ];
+
+    const prompt = `You are an expert in waste management and recycling. Analyze this image and provide:
+      1. Confirm if the waste type matches: ${selectedTask.wasteType}
+      2. Estimate the quantity of waste in the image (in kg or liters)
+      3. Compare the estimated quantity to the reported quantity: ${selectedTask.amount}
+      4. Your confidence level in this assessment (as a percentage)
+      
+      Respond in JSON format like this:
+      {
+        "wasteTypeMatch": true/false,
+        "estimatedWeight": "estimated quantity with unit",
+        "quantityMatch": true/false,
+        "confidence": confidence level as a number between 0 and 1
+      }`;
+
+    const result = await model.generateContent([prompt, ...imageParts]);
+    const response = await result.response;
+    const text = response.text();
+
+    // Sanitize the response to remove Markdown code blocks
+    const sanitizedText = text.replace(/```json|```/g, '').trim();
+
+    console.log('Raw Response:', text); // Debugging: Log the raw response
+    console.log('Sanitized Response:', sanitizedText); // Debugging: Log the sanitized response
+
+    try {
+      // Parse the sanitized JSON response
+      const parsedResult = JSON.parse(sanitizedText);
+
+      // Log the estimated weight for debugging
+      console.log('Estimated Weight:', parsedResult.estimatedWeight);
+      console.log('Reported Weight:', selectedTask.amount);
+
+      // Update verification result and status
+      setVerificationResult({
+        wasteTypeMatch: parsedResult.wasteTypeMatch,
+        quantityMatch: parsedResult.quantityMatch,
+        confidence: parsedResult.confidence,
+      });
+      setVerificationStatus('success');
+
+      // Check if verification is successful
+      if (parsedResult.wasteTypeMatch && isWeightMatch(selectedTask.amount, parsedResult.estimatedWeight) && parsedResult.confidence > 0.7) {
+        // Update task status to 'verified'
+        await handleStatusChange(selectedTask.id, 'verified');
+
+        // Calculate and save the reward
+        const earnedReward = Math.floor(Math.random() * 50) + 10; // Random reward between 10 and 59
+        await saveReward(user.id, earnedReward);
+
+        // Save the collected waste
+        await saveCollectedWaste(selectedTask.id, user.id, parsedResult);
+
+        // Set the reward and show success message
+        setReward(earnedReward);
+        toast.success(`Verification successful! You earned ${earnedReward} tokens!`, {
+          duration: 5000,
+          position: 'top-center',
+        });
+      } else {
+        // Show error message if verification fails
+        toast.error('Verification failed. The collected waste does not match the reported waste.', {
+          duration: 5000,
+          position: 'top-center',
+        });
+      }
+    } catch (error) {
+      console.error('Failed to parse JSON response:', sanitizedText);
+      setVerificationStatus('failure');
+    }
+  } catch (error) {
+    console.error('Error verifying waste:', error);
+    setVerificationStatus('failure');
+  }
+};
+
+// Helper function to check if weight matches within a tolerance
+const isWeightMatch = (reportedWeight: string, estimatedWeight: string) => {
+  const reported = parseFloat(reportedWeight);
+  const estimated = parseFloat(estimatedWeight);
+
+  if (isNaN(reported) || isNaN(estimated)) return false;
+
+  const tolerance = 0.1; // ±10% tolerance
+  const difference = Math.abs(reported - estimated) / reported;
+
+  return difference <= tolerance;
+};
   const filteredTasks = tasks.filter(task =>
     task.location.toLowerCase().includes(searchTerm.toLowerCase())
   )
